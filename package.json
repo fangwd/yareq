@@ -1,0 +1,28 @@
+{
+  "name": "yareq",
+  "version": "0.0.1",
+  "description": "Yet another (veryrequest for Node.js",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fangwd/yareq.git"
+  },
+  "dependencies": {
+  },
+  "keywords": [
+    "Node.js",
+    "HTTP",
+    "Request",
+    "GET",
+    "POST"
+  ],
+  "author": "Weidong Fang",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/fangwd/yareq/issues"
+  },
+  "homepage": "https://github.com/fangwd/yareq#readme"
+}
