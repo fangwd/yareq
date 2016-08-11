@@ -5,6 +5,8 @@ const URL    = require('url'),
       https  = require('https'),
       extend = require('util')._extend
 
+const USER_AGENT = 'Mozilla/5.0 yareq/0.1'
+
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
 
 module.exports = (url, options, next) => {
@@ -49,6 +51,12 @@ module.exports = (url, options, next) => {
 
   extend(options, url)
 
+  options.headers = options.headers || {}
+
+  if (!options.headers['user-agent'] && !options.headers['User-Agent']) {
+    options.headers['User-Agent'] = USER_AGENT
+  }
+
   let proto = url.protocol === 'https:' ? https : http
   let req = proto.request(options, (res) => {
     let chunks = []
@@ -65,7 +73,7 @@ module.exports = (url, options, next) => {
   })
 
   if (data) {
-    if (typeof data === 'object') {
+    if (typeof data === 'object' && !(data instanceof Buffer)) {
       data = JSON.stringify(data)
     }
     req.write(data)
