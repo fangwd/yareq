@@ -1,6 +1,6 @@
 {
   "name": "yareq",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Yet another (veryrequest for Node.js",
   "main": "index.js",
   "scripts": {

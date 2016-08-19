@@ -24,7 +24,7 @@ module.exports = (url, options, next) => {
   if ('data' in options) {
     data = options.data
     delete options.data
-    if (!('method' in options)) {
+    if (data && !('method' in options)) {
       options.method = 'POST'
     }
   }
