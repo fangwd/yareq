@@ -3,9 +3,8 @@
 const URL    = require('url'),
       http   = require('http'),
       https  = require('https'),
+      zlib   = require('zlib'),
       extend = require('util')._extend
-
-const USER_AGENT = 'Mozilla/5.0 yareq/0.1'
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
 
@@ -18,6 +17,20 @@ module.exports = (url, options, next) => {
     next = options
     options = {}
   }
+
+  let headers = extend({
+    'Accept-Encoding': 'gzip, deflate',
+    'User-Agent': 'Mozilla/5.0 yareq/0.1'
+  }, 'headers' in options ? options.headers : null)
+
+  options = extend({
+    socketTimeout: -1,
+    followLocation: false,
+    maxRedirect: 2,
+    inflateContent: false
+  }, options)
+
+  options.headers = headers
 
   let data = null
 
@@ -49,35 +62,79 @@ module.exports = (url, options, next) => {
     url = URL.parse(url)
   }
 
-  extend(options, url)
+  let redirectCount = 0
 
-  options.headers = options.headers || {}
-
-  if (!options.headers['user-agent'] && !options.headers['User-Agent']) {
-    options.headers['User-Agent'] = USER_AGENT
-  }
-
-  let proto = url.protocol === 'https:' ? https : http
-  let req = proto.request(options, (res) => {
-    let chunks = []
-    res.on('data', (chunk) => {
-      chunks.push(chunk)
+  let doGet = (url, next) => {
+    extend(options, url)
+    let proto = url.protocol === 'https:' ? https : http
+    let req = proto.request(options, (res) => {
+      let chunks = []
+      res.on('data', (chunk) => {
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        if (options.followLocation && res.statusCode >= 300 &&
+            res.statusCode <= 399 && 'location' in res.headers) {
+          if (redirectCount++ >= options.maxRedirect) {
+            return next('Too many redirects')
+          }
+          url = URL.parse(URL.resolve(url.href, res.headers.location))
+          return doGet(url, next)
+        }
+        if (redirectCount > 0) {
+          res.headers['x-effective-url'] = url.href
+        }
+        let encoding = res.headers['content-encoding'],
+            content = Buffer.concat(chunks)
+        if (options.inflateContent && (encoding === 'gzip'||
+            encoding === 'deflate')) {
+          if (encoding === 'gzip') {
+            zlib.gunzip(content, function(err, buf) {
+              next(err, res, buf)
+            })
+          }
+          else {
+            zlib.inflate(content, function(err, buf) {
+              if (err) {
+                zlib.inflateRaw(content, function(err, buf) {
+                  next(err, res, buf)
+                })
+              }
+              else {
+                next(err, res, buf)
+              }
+            })
+          }
+        }
+        else {
+          next(null, res, content)
+        }
+      })
     })
-    res.on('end', () => {
-      next(null, res, Buffer.concat(chunks))
-    })
-  })
 
-  req.on('error', (err) => {
-    next(err)
-  })
-
-  if (data) {
-    if (typeof data === 'object' && !(data instanceof Buffer)) {
-      data = JSON.stringify(data)
+    if (data) {
+      if (typeof data === 'object' && !(data instanceof Buffer)) {
+        data = JSON.stringify(data)
+      }
+      req.write(data)
     }
-    req.write(data)
+
+    if (options.socketTimeout > 0) {
+      req.on('socket', function (socket) {
+        socket.setTimeout(options.socketTimeout)
+        socket.on('timeout', function() {
+          // Socket timeout
+          req.abort()
+        })
+      })
+    }
+
+    req.on('error', (err) => {
+      next(err)
+    })
+
+    req.end()
   }
 
-  req.end()
+  doGet(url, next)
 }
