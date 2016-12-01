@@ -1,7 +1,7 @@
 {
   "name": "yareq",
-  "version": "0.1.0",
-  "description": "Yet another (veryrequest for Node.js",
+  "version": "0.2.0",
+  "description": "Yet another request for Node.js",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -11,9 +11,11 @@
     "url": "git+https://github.com/fangwd/yareq.git"
   },
   "dependencies": {
+    "socks-wrapper" : ">=0.2.0"
   },
   "keywords": [
     "Node.js",
+    "SOCKS4a",
     "HTTP",
     "Request",
     "GET",

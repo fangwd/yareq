@@ -4,6 +4,7 @@ const URL    = require('url'),
       http   = require('http'),
       https  = require('https'),
       zlib   = require('zlib'),
+      wrapper = require('socks-wrapper'),
       extend = require('util')._extend
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
@@ -50,7 +51,7 @@ module.exports = (url, options, next) => {
 
   next = next || dummy
 
-  if (typeof url === 'string') {
+  function rewrite(url) {
     if (!/^\w+:/.test(url)) {
       if (url.substr(0,2) !== '//') {
         url = 'http://' + url
@@ -59,7 +60,11 @@ module.exports = (url, options, next) => {
         url = 'http:' + url
       }
     }
-    url = URL.parse(url)
+    return url
+  }
+
+  if (typeof url === 'string') {
+    url = URL.parse(rewrite(url))
   }
 
   let redirectCount = 0
@@ -67,6 +72,22 @@ module.exports = (url, options, next) => {
   let doGet = (url, next) => {
     extend(options, url)
     let proto = url.protocol === 'https:' ? https : http
+    if (options.proxy) {
+      let proxy = URL.parse(rewrite(options.proxy))
+      if (/^socks/.test(proxy.protocol)) {
+        let Agent = proto === http ? wrapper.HttpAgent : wrapper.HttpsAgent
+        options.agent = new Agent(proxy.port, proxy.hostname)
+      }
+      else {
+        proto = proxy.protocol === 'https:' ? https : http
+        options.protocol = proxy.protocol
+        options.host = proxy.hostname
+        options.port = proxy.port
+        options.path = url.href
+        delete options.hostname
+      }
+    }
+
     let req = proto.request(options, (res) => {
       let chunks = []
       res.on('data', (chunk) => {
