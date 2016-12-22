@@ -67,6 +67,17 @@ module.exports = (url, options, next) => {
     url = URL.parse(rewrite(url))
   }
 
+  // This can be an instance of touch-cookie's CookieJar
+  let cookieJar = null
+  if ('cookieJar' in options) {
+    cookieJar = options.cookieJar
+    delete options.cookieJar
+    let cookie = cookieJar.getCookieStringSync(url)
+    if (cookie) {
+      options.headers['Cookie'] = cookie
+    }
+  }
+
   let redirectCount = 0
 
   let doGet = (url, next) => {
@@ -89,6 +100,18 @@ module.exports = (url, options, next) => {
     }
 
     let req = proto.request(options, (res) => {
+      if (cookieJar && ('set-cookie' in res.headers)) {
+        let cookies = res.headers['set-cookie']
+        if (!Array.isArray(cookies)) {
+          cookieJar.setCookieSync(cookies, url.href)
+        }
+        else {
+          cookies.forEach(cookie => {
+            cookieJar.setCookieSync(cookie, url)
+          })
+        }
+      }
+
       let chunks = []
       res.on('data', (chunk) => {
         chunks.push(chunk)
