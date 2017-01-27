@@ -5,18 +5,27 @@ const URL    = require('url'),
       https  = require('https'),
       zlib   = require('zlib'),
       wrapper = require('socks-wrapper'),
-      extend = require('util')._extend
+      extend = require('util')._extend,
+      Response = require('./lib/response.js')
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
 
-module.exports = (url, options, next) => {
-  if (typeof url === 'undefined') {
-    throw 'Nothing to request'
+const globals = { Response: Response }
+
+globals.fetch = (origUrl, options={}) => {
+  let url
+
+  if (typeof origUrl === 'string' || (url instanceof URL.Url)) {
+    url = origUrl
+  }
+  else if (origUrl && typeof origUrl === 'object' && ('url' in origUrl)) {
+    url = origUrl.url
   }
 
-  if (typeof options == 'undefined' || typeof options === 'function') {
-    next = options
-    options = {}
+  if (!url) return Promise.reject(Error('Bad url'))
+
+  if (typeof options === 'string') {
+    options = { proxy: options }
   }
 
   let headers = extend({
@@ -28,7 +37,7 @@ module.exports = (url, options, next) => {
     socketTimeout: -1,
     followLocation: false,
     maxRedirect: 2,
-    inflateContent: false
+    inflateContent: true
   }, options)
 
   options.headers = headers
@@ -42,14 +51,6 @@ module.exports = (url, options, next) => {
       options.method = 'POST'
     }
   }
-
-  let dummy = (err, res, body) => {
-    if (err) throw err
-    console.log(`HTTP/${res.httpVersion} ${res.statusCode} ${res.statusMessage}`)
-    console.log(body.toString())
-  }
-
-  next = next || dummy
 
   function rewrite(url) {
     if (!/^\w+:/.test(url)) {
@@ -97,6 +98,11 @@ module.exports = (url, options, next) => {
         options.path = url.href
         delete options.hostname
       }
+    }
+
+    let onFetchStart = options.onFetchStart || globals.onFetchStart
+    if (typeof onFetchStart === 'function') {
+      onFetchStart(origUrl, options)
     }
 
     let req = proto.request(options, (res) => {
@@ -180,5 +186,25 @@ module.exports = (url, options, next) => {
     req.end()
   }
 
-  doGet(url, next)
+  return new Promise((resolve, reject) => {
+    let fetchStart = Date.now()
+    doGet(url, (err, res, buf) => {
+      let onFetchEnd = options.onFetchEnd || globals.onFetchEnd
+      if (typeof onFetchEnd === 'function') {
+        onFetchEnd(origUrl, err, res, buf)
+      }
+      if (err) {
+        reject(new Error(err))
+      }
+      else {
+        res = Object.assign({}, res, {
+          fetchStart: fetchStart,
+          fetchEnd: Date.now()
+        })
+        resolve(new Response(origUrl, res, buf))
+      }
+    })
+  })
 }
+
+module.exports = globals
