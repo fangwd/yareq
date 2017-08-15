@@ -6,7 +6,8 @@ const URL    = require('url'),
       zlib   = require('zlib'),
       wrapper = require('socks-wrapper'),
       extend = require('util')._extend,
-      Response = require('./lib/response.js')
+      Response = require('./lib/response.js'),
+      HttpsAgent = require('./lib/https-agent')
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
 
@@ -92,11 +93,18 @@ globals.fetch = (origUrl, options={}) => {
       }
       else {
         proto = proxy.protocol === 'https:' ? https : http
-        options.protocol = proxy.protocol
-        options.host = proxy.hostname
-        options.port = proxy.port
-        options.path = url.href
-        delete options.hostname
+        if (options.protocol === 'http:') {
+          options.protocol = proxy.protocol
+          options.host = proxy.hostname
+          options.port = proxy.port
+          options.path = url.href
+          delete options.hostname
+        }
+        else {
+          let agent = new HttpsAgent({ proxy: proxy })
+          options.port = options.port || 443
+          options.agent = agent
+        }
       }
     }
 
