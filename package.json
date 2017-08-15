@@ -11,7 +11,7 @@
     "url": "git+https://github.com/fangwd/yareq.git"
   },
   "dependencies": {
-    "socks-wrapper" : ">=0.2.0"
+    "socks-wrapper" : ">=0.3.0"
   },
   "keywords": [
     "Node.js",
