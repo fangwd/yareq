@@ -92,7 +92,6 @@ globals.fetch = (origUrl, options={}) => {
         options.agent = new Agent(proxy.port, proxy.hostname)
       }
       else {
-        proto = proxy.protocol === 'https:' ? https : http
         if (options.protocol === 'http:') {
           options.protocol = proxy.protocol
           options.host = proxy.hostname
@@ -179,9 +178,11 @@ globals.fetch = (origUrl, options={}) => {
 
     if (options.socketTimeout > 0) {
       req.on('socket', function (socket) {
+        if (options.socketTimeout < 100) {
+          throw Error('Invalid socket timeout')
+        }
         socket.setTimeout(options.socketTimeout)
         socket.on('timeout', function() {
-          // Socket timeout
           req.abort()
         })
       })
