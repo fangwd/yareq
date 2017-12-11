@@ -69,7 +69,7 @@ globals.fetch = (origUrl, options={}) => {
     url = URL.parse(rewrite(url))
   }
 
-  // This can be an instance of touch-cookie's CookieJar
+  // This can be an instance of tough-cookie's CookieJar
   let cookieJar = null
   if ('cookieJar' in options) {
     cookieJar = options.cookieJar
@@ -169,13 +169,6 @@ globals.fetch = (origUrl, options={}) => {
       })
     })
 
-    if (data) {
-      if (typeof data === 'object' && !(data instanceof Buffer)) {
-        data = JSON.stringify(data)
-      }
-      req.write(data)
-    }
-
     if (options.socketTimeout > 0) {
       req.on('socket', function (socket) {
         if (options.socketTimeout < 100) {
@@ -192,12 +185,25 @@ globals.fetch = (origUrl, options={}) => {
       next(err)
     })
 
+    if (data) {
+      if (typeof data.pipe === 'function') {
+        data.pipe(req)
+        return
+      }
+      else {
+        if (typeof data === 'object' && !(data instanceof Buffer)) {
+          data = JSON.stringify(data)
+        }
+        req.write(data)
+      }
+    }
+
     req.end()
   }
 
   return new Promise((resolve, reject) => {
     let fetchStart = Date.now()
-    doGet(url, (err, res, buf) => {
+    function cb(err, res, buf) {
       let onFetchEnd = options.onFetchEnd || globals.onFetchEnd
       if (typeof onFetchEnd === 'function') {
         onFetchEnd(origUrl, err, res, buf)
@@ -212,7 +218,27 @@ globals.fetch = (origUrl, options={}) => {
         })
         resolve(new Response(origUrl, res, buf))
       }
-    })
+    }
+    if (data && typeof data.getHeaders === 'function') {
+      const dataHeaders = data.getHeaders()
+      for (let key in dataHeaders) {
+        headers[key] = dataHeaders[key]
+      }
+    }
+    if (data && typeof data.getLength === 'function') {
+      data.getLength((err, length) => {
+        if (err) {
+          reject(new Error(err))
+        }
+        else {
+          headers['Content-Length'] = length
+          doGet(url, cb)
+        }
+      })
+    }
+    else {
+      doGet(url, cb)
+    }
   })
 }
 
