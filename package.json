@@ -1,6 +1,6 @@
 {
   "name": "yareq",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Yet another request for Node.js",
   "main": "index.js",
   "scripts": {
