@@ -1,15 +1,14 @@
-'use strict'
+'use strict';
 
 const http = require('http'),
   https = require('https'),
-  tls = require('tls')
+  tls = require('tls');
 
 class HttpsAgent extends https.Agent {
-
   constructor(options) {
-    super(options)
-    this.proxy = options.proxy
-    this.timeout = options.timeout || 5000
+    super(options);
+    this.proxy = options.proxy;
+    this.timeout = options.timeout || 5000;
   }
 
   createConnection(url, next) {
@@ -21,31 +20,33 @@ class HttpsAgent extends https.Agent {
       headers: {
         host: url.hostname
       }
-    })
+    });
 
-    let timer, timeout = this.timeout;
+    let timer,
+      timeout = this.timeout;
 
     req.on('socket', socket => {
       timer = setTimeout(() => {
-        socket.destroy()
-        clearTimeout(timer)
-      }, timeout)
-    })
+        socket.destroy();
+        clearTimeout(timer);
+      }, timeout);
+    });
 
     req.on('connect', (res, socket, head) => {
-      clearTimeout(timer)
-      let stream = tls.connect({ socket },  () => next(null, stream))
-      stream.on('error', next)
-    })
+      clearTimeout(timer);
+      let stream = tls.connect(
+        { socket },
+        () => next(null, stream)
+      );
+      stream.on('error', next);
+    });
 
     req.on('error', err => {
-      clearTimeout(timer)
-      next(err)
-    })
-    req.end()
+      clearTimeout(timer);
+      next(err);
+    });
+    req.end();
   }
-
 }
 
-module.exports = HttpsAgent
-
+module.exports = HttpsAgent;
