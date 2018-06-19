@@ -1,6 +1,6 @@
 {
   "name": "yareq",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "keywords": [
     "request",
     "proxy",
@@ -18,7 +18,7 @@
     "url": "git+https://github.com/fangwd/yareq.git"
   },
   "dependencies": {
-    "socks-wrapper": "^0.3.1"
+    "socks-wrapper": "^0.4.0"
   },
   "devDependencies": {
     "tough-cookie": "^2.4.2",
