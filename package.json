@@ -1,6 +1,6 @@
 {
   "name": "yareq",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "keywords": [
     "request",
     "proxy",
@@ -12,7 +12,7 @@
   "license": "MIT",
   "homepage": "https://github.com/fangwd/yareq#readme",
   "main": "index.js",
-  "files": ["src", "test", "index.js", "LICENSE", "package.json", "README.md"],
+  "files": ["src", "test", "index.js", "index.d.ts", "LICENSE", "package.json", "README.md"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fangwd/yareq.git"
