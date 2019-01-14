@@ -1,3 +1,19 @@
 # yareq - Yet another request for node.js
 
-Now with support for http, https and socks4a proxies.
+## Install
+
+```
+$ npm install yareq
+```
+
+# Usage
+
+```js
+const { request } = require('yareq');
+
+(async function(proxy) {
+  const response = await request('https://www.google.com/', { proxy });
+  console.log(response.statusCode); // 200
+})('socks5://localhost:9050');
+
+```

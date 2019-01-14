@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "baseUrl": "src",
+    "module": "commonjs",
+    "target": "es6",
+    "types": ["node", "jest"],
+    "typeRoots": ["node_modules/@types"],
+    "inlineSourceMap": true,
+    "outDir": "dist",
+    "lib": ["es6"],
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}

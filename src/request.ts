@@ -1,33 +1,52 @@
-'use strict';
+import { resolve as resolveUrl, URL } from 'url';
+import { request as httpRequest, RequestOptions, IncomingMessage } from 'http';
+import { request as httpsRequest } from 'https';
+import { Response } from './response';
+import { parseUrl, pickAssign, setHeader, setProxy, inflate } from './utils';
 
-const URL = require('url');
-const http = require('http');
-const https = require('https');
-const { Response } = require('./src/response');
-const { version } = require('./package.json');
+const { version } = require('../package.json');
 
-const {
-  parseUrl,
-  pickAssign,
-  setHeader,
-  setProxy,
-  inflate
-} = require('./src/utils');
+type RequestResult = [IncomingMessage, Buffer];
 
-function request(url, options = {}) {
+export interface WithUrl {
+  [key: string]: any;
+  url: string;
+}
+
+export interface Options {
+  data?: any;
+  followLocation?: boolean;
+  getCookie?: (url: string) => string | number;
+  setCookie?: (cookie: string, url: string) => void;
+  headers?:
+    | { [header: string]: string | string[] | undefined }
+    | [string, string][];
+  inflate?: boolean;
+  maxRedirect?: number;
+  proxy?: string;
+  setHost?: boolean;
+  timeout?: number;
+}
+
+export async function request(
+  url: string | WithUrl,
+  options: Options = {}
+): Promise<Response> {
+  return requestInternal(url, options).then(result => <Response>result);
+}
+
+async function requestInternal(url: string | WithUrl, options: Options) {
   return new Promise((resolve, reject) => {
-    function _request(url) {
-      const request = buildRequest(parseUrl(url), options);
-      const fetchStart = new Date();
+    const fetchStart = new Date();
+
+    async function _request(url: string | WithUrl) {
+      const request = await buildRequest(parseUrl(url), options);
       execute(request, options.data)
-        .then(result => {
+        .then(async result => {
           const [res, buf] = result;
-          const encoding = res.headers['content-encoding'];
-          const inflateContent = options.inflateContent !== false;
-          setCookie(options, res.headers['set-cookie'], url);
-          res.fetchStart = fetchStart;
-          res.fetchEnd = new Date();
-          if (inflateContent && /gzip|deflate/.test(encoding)) {
+          const encoding = res.headers['content-encoding'] || '';
+          await setCookie(options, res.headers['set-cookie'], url);
+          if (options.inflate !== false && /gzip|deflate/.test(encoding)) {
             inflate(buf, encoding).then(content => {
               _resolve(new Response(url, res, content));
             });
@@ -40,7 +59,7 @@ function request(url, options = {}) {
 
     let redirectCount = 0;
 
-    function _resolve(res) {
+    function _resolve(res: Response) {
       if (
         options.followLocation &&
         res.statusCode >= 300 &&
@@ -50,11 +69,18 @@ function request(url, options = {}) {
         if (redirectCount++ >= (options.maxRedirect || 50)) {
           reject(Error('Too many redirects'));
         } else {
-          const nextUrl = URL.parse(URL.resolve(res.url, res.headers.location));
+          const baseUrl = typeof res.url === 'string' ? res.url : res.url.url;
+          const nextUrl = resolveUrl(baseUrl, res.headers.location);
           redirectCount++;
           _request(nextUrl);
         }
       } else {
+        if (redirectCount > 0) {
+          res.effectiveUrl = <string>res.url;
+          res.url = url;
+        }
+        res.fetchStart = fetchStart;
+        res.fetchEnd = new Date();
         resolve(res);
       }
     }
@@ -63,22 +89,29 @@ function request(url, options = {}) {
   });
 }
 
-function setCookie(options, cookie, url) {
+async function setCookie(
+  options: Options,
+  cookie: string[] | undefined,
+  url: string | WithUrl
+) {
   if (cookie && typeof options.setCookie === 'function') {
     if (!Array.isArray(cookie)) {
-      options.setCookie(cookie, url);
+      options.setCookie(cookie, typeof url === 'string' ? url : url.url);
     } else {
-      cookie.forEach(value => {
-        options.setCookie(value, url);
-      });
+      for (const value of cookie) {
+        options.setCookie(value, typeof url === 'string' ? url : url.url);
+      }
     }
   }
 }
 
-function buildRequest(url, options) {
+async function buildRequest(
+  url: URL,
+  options: Options
+): Promise<RequestOptions> {
   const request = pickAssign({}, url, ['protocol', 'hostname', 'path']);
 
-  if (url.port !== '') {
+  if (url.port) {
     request.port = parseInt(url.port);
   }
 
@@ -113,7 +146,7 @@ function buildRequest(url, options) {
   }
 
   if (options.setHost === undefined || options.setHost) {
-    setHeader(request.headers, 'Host', url.hostname);
+    setHeader(request.headers, 'Host', url.host);
   }
 
   if (options.proxy) {
@@ -121,7 +154,7 @@ function buildRequest(url, options) {
   }
 
   if (typeof options.getCookie === 'function') {
-    const cookie = options.getCookie(url);
+    const cookie = await options.getCookie(url.href);
     if (cookie) {
       setHeader(request.headers, 'Cookie', cookie);
     }
@@ -130,11 +163,12 @@ function buildRequest(url, options) {
   return request;
 }
 
-function execute(options, data) {
-  const proto = options.protocol == 'http:' ? http : https;
+function execute(options: RequestOptions, data: any): Promise<RequestResult> {
+  const request = options.protocol == 'http:' ? httpRequest : httpsRequest;
   return new Promise((resolve, reject) => {
-    const req = proto.request(options, res => {
-      const chunks = [];
+    const req = request(options, res => {
+      const chunks: Buffer[] = [];
+
       res.on('data', chunk => {
         chunks.push(chunk);
       });
@@ -154,7 +188,7 @@ function execute(options, data) {
 
     req.on('error', error => {
       if (!req.aborted) {
-        reject(Error(error));
+        reject(error);
       }
     });
 
@@ -173,14 +207,3 @@ function execute(options, data) {
     req.end();
   });
 }
-
-module.exports = {
-  get: request,
-  post: (url, data, options) => {
-    return request(url, Object.assign({}, options, { data }));
-  },
-  request,
-  Response
-};
-
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0;

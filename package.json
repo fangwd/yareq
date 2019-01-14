@@ -1,6 +1,6 @@
 {
   "name": "yareq",
-  "version": "0.7.2",
+  "version": "1.0.0",
   "keywords": [
     "request",
     "proxy",
@@ -10,9 +10,16 @@
   "description": "Yet another request for Node.js",
   "author": "Weidong Fang",
   "license": "MIT",
-  "homepage": "https://github.com/fangwd/yareq#readme",
-  "main": "index.js",
-  "files": ["src", "test", "index.js", "index.d.ts", "LICENSE", "package.json", "README.md"],
+  "homepage": "https://github.com/fangwd/yareq",
+  "main": "./dist/index.js",
+  "files": [
+    "src",
+    "dist",
+    "LICENSE",
+    "package.json",
+    "README.md"
+  ],
+  "types": "./dist/index.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fangwd/yareq.git"
@@ -21,11 +28,36 @@
     "socks-wrapper": "^0.4.0"
   },
   "devDependencies": {
+    "@types/jest": "^23.3.12",
+    "@types/node": "^10.12.18",
+    "@types/tough-cookie": "^2.3.4",
+    "jest": "^23.6.0",
     "tough-cookie": "^2.4.2",
-    "mocha": "^5.2.0"
+    "ts-jest": "^23.10.5",
+    "typescript": "^3.2.2"
   },
   "scripts": {
-    "test": "mocha test/*.js --timeout 10000"
+    "test": "jest"
+  },
+  "jest": {
+    "transform": {
+      "^.+\\.tsx?$": "ts-jest"
+    },
+    "testRegex": "/test/response\\.test.ts",
+    "testURL": "http://localhost/",
+    "moduleFileExtensions": [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "json",
+      "node"
+    ],
+    "collectCoverage": false,
+    "collectCoverageFrom": [
+      "src/**/*.ts"
+    ],
+    "verbose": true
   },
   "bugs": {
     "url": "https://github.com/fangwd/yareq/issues"
