@@ -1,17 +1,24 @@
 import { readFile, writeFile } from 'fs';
 import { gzip, gunzip } from 'zlib';
-import { WithUrl } from './request';
-import { IncomingMessage, IncomingHttpHeaders } from 'http';
+import { WithUrl } from '.';
+import { IncomingHttpHeaders } from 'http';
+
+import * as crypto from 'crypto';
 
 export interface SaveOptions {
   compress?: boolean;
   bodyOnly?: boolean;
 }
 
+interface MessageInfo {
+  httpVersion: string;
+  statusCode?: number;
+  headers: IncomingHttpHeaders | [string, string][];
+}
+
 export class Response {
   url: string | WithUrl;
   statusCode: number;
-  statusMessage: string;
   headers: IncomingHttpHeaders;
   httpVersion: string;
   fetchStart: Date | null;
@@ -19,16 +26,36 @@ export class Response {
   effectiveUrl?: string | null;
   body: Buffer;
 
-  constructor(url: string | WithUrl, res: IncomingMessage, buf: Buffer) {
+  constructor(url: string | WithUrl, res: MessageInfo, buf: Buffer) {
     this.url = url;
     this.statusCode = res.statusCode || -1;
-    this.statusMessage = res.statusMessage || '';
-    this.headers = res.headers;
+    this.headers = Array.isArray(res.headers)
+      ? toHeaders(res.headers)
+      : res.headers;
     this.httpVersion = res.httpVersion;
     this.fetchStart = null;
     this.fetchEnd = null;
     this.effectiveUrl = null;
     this.body = buf;
+  }
+
+  get contentEncoding(): string {
+    return <string>this.headers['content-encoding'];
+  }
+
+  get contentMD5(): string {
+    return crypto
+      .createHash('md5')
+      .update(this.body)
+      .digest('hex');
+  }
+
+  get contentLength(): number {
+    return this.body.length;
+  }
+
+  get contentType(): string {
+    return <string>this.headers['content-type'];
   }
 
   json(): any {
@@ -43,7 +70,6 @@ export class Response {
       JSON.stringify({
         url: this.url,
         statusCode: this.statusCode,
-        statusMessage: this.statusMessage,
         headers: this.headers,
         httpVersion: this.httpVersion,
         fetchStart: this.fetchStart,
@@ -108,4 +134,21 @@ export class Response {
       });
     });
   }
+}
+
+function toHeaders(headers: [string, string][]): IncomingHttpHeaders {
+  const result: IncomingHttpHeaders = {};
+  for (const entry of headers) {
+    const key = entry[0].toLowerCase();
+    const value = entry[1];
+    const existing = result[key];
+    if (!existing) {
+      result[key] = value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      result[key] = [existing, value];
+    }
+  }
+  return result;
 }
