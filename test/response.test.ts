@@ -15,6 +15,9 @@ test('save #0', async () => {
   const path = getPath();
   await res.save(path, { compress: false });
   const out = await Response.load(path);
+  expect(out.contentMD5).toBe(res.contentMD5);
+  expect(out.contentMD5.length).toBe(32);
+  expect(/text/.test(out.contentType)).toBe(true);
   expect((out.url as WithUrl).id).toBe(1);
   await remove(path);
 }, 10000);
