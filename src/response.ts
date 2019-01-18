@@ -58,6 +58,13 @@ export class Response {
     return <string>this.headers['content-type'];
   }
 
+  get fetchDuration(): number {
+    if (!this.fetchStart || !this.fetchEnd) {
+      throw Error('Fetch start/end not set');
+    }
+    return this.fetchEnd.getTime() - this.fetchStart.getTime();
+  }
+
   json(): any {
     return JSON.parse(this.body.toString());
   }
