@@ -125,6 +125,8 @@ async function buildRequest(
     request.method = options.data === undefined ? 'GET' : 'POST';
   }
 
+  request.path = request.path && encodeURI(request.path);
+
   if (options.headers !== undefined) {
     request.headers = [];
     if (Array.isArray(options.headers)) {
