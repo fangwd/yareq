@@ -26,6 +26,7 @@ export interface Options {
   proxy?: string;
   setHost?: boolean;
   timeout?: number;
+  method?: string;
 }
 
 export async function request(
@@ -145,6 +146,10 @@ async function buildRequest(
       ['Connection', 'keep-alive'],
       ['User-Agent', `Mozilla/5.0 Yareq/${version}`]
     ];
+  }
+
+  if (typeof options.data === 'object' && !(options.data instanceof Buffer)) {
+    setHeader(request.headers, 'Content-Type', 'application/json');
   }
 
   if (options.setHost === undefined || options.setHost) {
