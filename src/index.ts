@@ -1,2 +1,2 @@
 export { request, Options, WithUrl } from './request';
-export { Response } from './response';
+export { ResponseInfo, Response } from './response';

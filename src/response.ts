@@ -10,7 +10,7 @@ export interface SaveOptions {
   bodyOnly?: boolean;
 }
 
-interface MessageInfo {
+export interface ResponseInfo {
   httpVersion: string;
   statusCode?: number;
   headers: IncomingHttpHeaders | [string, string][];
@@ -26,7 +26,7 @@ export class Response {
   effectiveUrl?: string | null;
   body: Buffer;
 
-  constructor(url: string | WithUrl, res: MessageInfo, buf: Buffer) {
+  constructor(url: string | WithUrl, res: ResponseInfo, buf: Buffer) {
     this.url = url;
     this.statusCode = res.statusCode || -1;
     this.headers = Array.isArray(res.headers)
