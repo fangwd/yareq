@@ -65,6 +65,10 @@ export class Response {
     return this.fetchEnd.getTime() - this.fetchStart.getTime();
   }
 
+  get urlString(): string {
+    return typeof this.url === 'string' ? this.url : this.url.url;
+  }
+
   json(): any {
     return JSON.parse(this.body.toString());
   }
