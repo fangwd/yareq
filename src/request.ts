@@ -13,6 +13,14 @@ export interface WithUrl {
   url: string;
 }
 
+export interface BasicAuthorisation {
+  type: 'basic';
+  username: string;
+  password: string;
+}
+
+export type Authorisation = BasicAuthorisation;
+
 export interface Options {
   data?: any;
   followLocation?: boolean;
@@ -27,6 +35,7 @@ export interface Options {
   setHost?: boolean;
   timeout?: number;
   method?: string;
+  authorisation?: Authorisation;
 }
 
 export async function request(
@@ -152,6 +161,22 @@ async function buildRequest(
 
   if (options.setHost === undefined || options.setHost) {
     setHeader(request.headers, 'Host', url.host);
+  }
+
+  if (options.authorisation) {
+    const authoriation = options.authorisation;
+    switch (authoriation.type) {
+      case 'basic':
+        const { username, password } = authoriation;
+        setHeader(
+          request.headers,
+          'Authorization',
+          'Basic ' + Buffer.from(`${username}:${password}`).toString('base64')
+        );
+        break;
+      default:
+        throw Error(`Unsupported authorisation type: ${authoriation.type}`);
+    }
   }
 
   if (options.proxy) {

@@ -1,11 +1,13 @@
 {
   "name": "yareq",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "keywords": [
     "request",
     "proxy",
     "socks",
-    "https"
+    "https",
+    "authorisation",
+    "basic"
   ],
   "description": "Yet another request for Node.js",
   "author": "Weidong Fang",
@@ -37,6 +39,7 @@
     "typescript": "^3.2.2"
   },
   "scripts": {
+    "build": "tsc -d",
     "test": "jest"
   },
   "jest": {
