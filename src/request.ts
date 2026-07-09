@@ -1,239 +1,683 @@
-import { resolve as resolveUrl, URL } from 'url';
-import { request as httpRequest, RequestOptions, IncomingMessage } from 'http';
+import {
+  IncomingMessage,
+  OutgoingHttpHeaders,
+  request as httpRequest,
+  RequestOptions as NodeRequestOptions
+} from 'http';
 import { request as httpsRequest } from 'https';
-import { Response } from './response';
-import { parseUrl, pickAssign, setHeader, setProxy, inflate } from './utils';
+import { Readable } from 'stream';
+import { MultipartBody } from './multipart';
+import { Response, StreamResponse } from './response';
+import { RequestTimeoutError, TooManyRedirectsError } from './errors';
+import {
+  applyProxy,
+  HeadersInput,
+  inflateBody,
+  inflateStream,
+  isReadable,
+  normalizeHeaders,
+  parseUrl,
+  RequestUrl,
+  setHeader,
+  setHeaderIfMissing
+} from './utils';
 
-const { version } = require('../package.json');
+const { version } = require('../package.json') as { version: string };
 
-type RequestResult = [IncomingMessage, Buffer];
+type MaybePromise<T> = T | Promise<T>;
 
-export interface WithUrl {
-  [key: string]: any;
-  url: string;
-}
+export type { HeadersInput, RequestUrl };
 
-export interface BasicAuthorisation {
+export type RequestBody =
+  | string
+  | Buffer
+  | Uint8Array
+  | URLSearchParams
+  | Readable
+  | MultipartBody;
+
+export interface BasicAuthorization {
   type: 'basic';
   username: string;
   password: string;
 }
 
-export type Authorisation = BasicAuthorisation;
+export type Authorization = BasicAuthorization | string;
+export type RedirectMode = 'manual' | 'follow';
+export type ResponseType = 'buffer' | 'stream';
 
-export interface Options {
-  data?: any;
-  followLocation?: boolean;
-  getCookie?: (url: string) => string | number;
-  setCookie?: (cookie: string, url: string) => void;
-  headers?:
-    | { [header: string]: string | string[] | undefined }
-    | [string, string][];
-  inflate?: boolean;
-  maxRedirect?: number;
-  proxy?: string;
-  setHost?: boolean;
-  timeout?: number;
+export interface RetryContext {
+  attempt: number;
+  retries: number;
+  method: string;
+  url: string;
+  statusCode?: number;
+  error?: Error;
+}
+
+export interface RetryOptions {
+  retries?: number;
+  methods?: readonly string[];
+  statusCodes?: readonly number[];
+  errorCodes?: readonly string[];
+  delay?: number | ((context: RetryContext) => number);
+  maxDelay?: number;
+  factor?: number;
+  jitter?: boolean | number;
+  respectRetryAfter?: boolean;
+}
+
+export interface RequestOptions {
   method?: string;
-  authorisation?: Authorisation;
+  headers?: HeadersInput;
+  body?: RequestBody;
+  json?: unknown;
+  timeout?: number;
+  redirect?: RedirectMode;
+  maxRedirects?: number;
+  proxy?: string | URL;
+  decompress?: boolean;
+  responseType?: ResponseType;
+  retry?: number | RetryOptions;
+  authorization?: Authorization;
+  signal?: AbortSignal;
+  getCookie?: (url: URL) => MaybePromise<string | number | undefined>;
+  setCookie?: (cookie: string, url: URL) => MaybePromise<void>;
 }
 
+type SerializedRequestBody = string | Buffer | Readable;
+
+interface SerializedBody {
+  body?: SerializedRequestBody;
+  headers: OutgoingHttpHeaders;
+}
+
+export function request(
+  url: RequestUrl,
+  options: RequestOptions & { responseType: 'stream' }
+): Promise<StreamResponse>;
+export function request(
+  url: RequestUrl,
+  options?: RequestOptions & { responseType?: 'buffer' }
+): Promise<Response>;
 export async function request(
-  url: string | WithUrl,
-  options: Options = {}
-): Promise<Response> {
-  return requestInternal(url, options).then(result => <Response>result);
-}
+  url: RequestUrl,
+  options: RequestOptions = {}
+): Promise<Response | StreamResponse> {
+  const retry = normalizeRetry(options.retry);
+  const initialUrl = parseUrl(url);
+  const method = normalizeMethod(options);
 
-async function requestInternal(url: string | WithUrl, options: Options) {
-  return new Promise((resolve, reject) => {
-    const fetchStart = new Date();
+  if (
+    retry.retries > 0 &&
+    retry.methods.includes(method) &&
+    !canReplayBody(options.body)
+  ) {
+    throw new TypeError('Cannot retry a request with a non-replayable body');
+  }
 
-    async function _request(url: string | WithUrl) {
-      const request = await buildRequest(parseUrl(url), options);
-      execute(request, options.data)
-        .then(async result => {
-          const [res, buf] = result;
-          const encoding = res.headers['content-encoding'] || '';
-          await setCookie(options, res.headers['set-cookie'], url);
-          if (options.inflate !== false && /gzip|deflate/.test(encoding)) {
-            inflate(buf, encoding).then(content => {
-              _resolve(new Response(url, res, content));
-            });
-          } else {
-            _resolve(new Response(url, res, buf));
-          }
-        })
-        .catch(reject);
-    }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await requestOnce(initialUrl, options);
+      const retryContext = retryContextForStatus(
+        retry,
+        attempt,
+        method,
+        initialUrl.href,
+        response
+      );
 
-    let redirectCount = 0;
-
-    function _resolve(res: Response) {
-      if (
-        options.followLocation &&
-        res.statusCode >= 300 &&
-        res.statusCode <= 399 &&
-        res.headers.location
-      ) {
-        if (redirectCount++ >= (options.maxRedirect || 50)) {
-          reject(Error('Too many redirects'));
-        } else {
-          const baseUrl = typeof res.url === 'string' ? res.url : res.url.url;
-          const nextUrl = resolveUrl(baseUrl, res.headers.location);
-          redirectCount++;
-          _request(nextUrl);
-        }
-      } else {
-        if (redirectCount > 0) {
-          res.effectiveUrl = <string>res.url;
-          res.url = url;
-        }
-        res.fetchStart = fetchStart;
-        res.fetchEnd = new Date();
-        resolve(res);
+      if (!retryContext || !canRetryRequest(retry, method, options.body)) {
+        return response;
       }
-    }
 
-    _request(url);
-  });
-}
+      discardResponse(response);
+      await delayForRetry(retry, retryContext, response.header('retry-after'));
+    } catch (error) {
+      const retryContext = retryContextForError(
+        retry,
+        attempt,
+        method,
+        initialUrl.href,
+        error
+      );
 
-async function setCookie(
-  options: Options,
-  cookie: string[] | undefined,
-  url: string | WithUrl
-) {
-  if (cookie && typeof options.setCookie === 'function') {
-    if (!Array.isArray(cookie)) {
-      options.setCookie(cookie, typeof url === 'string' ? url : url.url);
-    } else {
-      for (const value of cookie) {
-        options.setCookie(value, typeof url === 'string' ? url : url.url);
+      if (!retryContext || !canRetryRequest(retry, method, options.body)) {
+        throw error;
       }
+
+      await delayForRetry(retry, retryContext);
     }
   }
 }
 
-async function buildRequest(
+async function requestOnce(
+  initialUrl: URL,
+  options: RequestOptions
+): Promise<Response | StreamResponse> {
+  const fetchStart = new Date();
+  const redirects: string[] = [];
+  const maxRedirects = options.maxRedirects ?? 20;
+  const timeout = options.timeout ?? 30000;
+  let currentUrl = initialUrl;
+  let method = normalizeMethod(options);
+  let body = options.body;
+  let json = options.json;
+
+  while (true) {
+    const serializedBody = serializeBody(body, json);
+    const requestOptions = await buildRequestOptions(
+      currentUrl,
+      options,
+      method,
+      serializedBody,
+      timeout,
+      currentUrl.origin === initialUrl.origin
+    );
+    const { message } = await executeStream(
+      requestOptions,
+      serializedBody.body,
+      timeout
+    );
+    await storeCookies(options, message.headers['set-cookie'], currentUrl);
+
+    if (shouldFollowRedirectMessage(message, options.redirect)) {
+      message.resume();
+
+      if (redirects.length >= maxRedirects) {
+        throw new TooManyRedirectsError(maxRedirects);
+      }
+
+      const location = headerToString(message.headers.location);
+      redirects.push(currentUrl.href);
+      currentUrl = new URL(location, currentUrl);
+
+      const switchToGet = shouldSwitchRedirectToGet(
+        message.statusCode || -1,
+        method
+      );
+      if (switchToGet) {
+        method = 'GET';
+        body = undefined;
+        json = undefined;
+      } else if (!canReplayBody(body)) {
+        throw new Error('Cannot follow a preserving redirect with a non-replayable body');
+      }
+
+      continue;
+    }
+
+    if (options.responseType === 'stream') {
+      const stream =
+        options.decompress === false
+          ? message
+          : inflateStream(
+              message,
+              headerToString(message.headers['content-encoding'])
+            );
+      return new StreamResponse({
+        url: currentUrl.href,
+        requestUrl: initialUrl.href,
+        statusCode: message.statusCode || -1,
+        headers: message.headers,
+        httpVersion: message.httpVersion,
+        body: stream,
+        fetchStart,
+        fetchEnd: new Date(),
+        redirects: [...redirects]
+      });
+    }
+
+    const responseBody = await readResponseBody(message);
+    const decodedBody =
+      options.decompress === false
+        ? responseBody
+        : await inflateBody(
+            responseBody,
+            headerToString(message.headers['content-encoding'])
+          );
+
+    return new Response({
+      url: currentUrl.href,
+      requestUrl: initialUrl.href,
+      statusCode: message.statusCode || -1,
+      headers: message.headers,
+      httpVersion: message.httpVersion,
+      body: decodedBody,
+      fetchStart,
+      fetchEnd: new Date(),
+      redirects: [...redirects]
+    });
+  }
+}
+
+async function buildRequestOptions(
   url: URL,
-  options: Options
-): Promise<RequestOptions> {
-  const request = pickAssign({}, url, ['protocol', 'hostname', 'path']);
-
-  if (url.port) {
-    request.port = parseInt(url.port);
+  options: RequestOptions,
+  method: string,
+  serializedBody: SerializedBody,
+  timeout: number,
+  sendAuthorization: boolean
+): Promise<NodeRequestOptions> {
+  const headers = normalizeHeaders(options.headers);
+  applyDefaultHeaders(headers, options);
+  applyBodyHeaders(headers, serializedBody.headers);
+  if (sendAuthorization) {
+    applyAuthorization(headers, options.authorization);
   }
+  await applyCookies(headers, options, url);
+
+  const requestOptions: NodeRequestOptions = {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port || undefined,
+    path: `${url.pathname}${url.search}`,
+    method,
+    headers,
+    timeout,
+    signal: options.signal
+  };
 
   if (url.username || url.password) {
-    request.auth = `${url.username}:${url.password}`;
-  }
-
-  pickAssign(request, options, ['method', 'timeout']);
-
-  if (!request.method) {
-    request.method = options.data === undefined ? 'GET' : 'POST';
-  }
-
-  if (options.headers !== undefined) {
-    request.headers = [];
-    if (Array.isArray(options.headers)) {
-      for (const header of options.headers) {
-        request.headers.push([...header]);
-      }
-    } else {
-      for (const key in options.headers) {
-        request.headers.push([key, options.headers[key]]);
-      }
-    }
-  } else {
-    request.headers = [
-      ['Accept-Encoding', 'gzip, deflate'],
-      ['Accept-Language', 'en-AU,en;q=0.9'],
-      ['Connection', 'keep-alive'],
-      ['User-Agent', `Mozilla/5.0 Yareq/${version}`]
-    ];
-  }
-
-  if (typeof options.data === 'object' && !(options.data instanceof Buffer)) {
-    setHeader(request.headers, 'Content-Type', 'application/json');
-  }
-
-  if (options.setHost === undefined || options.setHost) {
-    setHeader(request.headers, 'Host', url.host);
-  }
-
-  if (options.authorisation) {
-    const authoriation = options.authorisation;
-    switch (authoriation.type) {
-      case 'basic':
-        const { username, password } = authoriation;
-        setHeader(
-          request.headers,
-          'Authorization',
-          'Basic ' + Buffer.from(`${username}:${password}`).toString('base64')
-        );
-        break;
-      default:
-        throw Error(`Unsupported authorisation type: ${authoriation.type}`);
-    }
+    requestOptions.auth = `${decodeURIComponent(
+      url.username
+    )}:${decodeURIComponent(url.password)}`;
   }
 
   if (options.proxy) {
-    setProxy(request, options.proxy, url);
+    applyProxy(requestOptions, options.proxy, url, timeout);
   }
 
-  if (typeof options.getCookie === 'function') {
-    const cookie = await options.getCookie(url.href);
-    if (cookie) {
-      setHeader(request.headers, 'Cookie', cookie);
-    }
-  }
-
-  return request;
+  return requestOptions;
 }
 
-function execute(options: RequestOptions, data: any): Promise<RequestResult> {
-  const request = options.protocol == 'http:' ? httpRequest : httpsRequest;
+function applyDefaultHeaders(
+  headers: OutgoingHttpHeaders,
+  options: RequestOptions
+): void {
+  if (options.decompress !== false) {
+    setHeaderIfMissing(headers, 'Accept-Encoding', 'gzip, deflate, br');
+  }
+  setHeaderIfMissing(headers, 'User-Agent', `Yareq/${version}`);
+}
+
+function applyBodyHeaders(
+  headers: OutgoingHttpHeaders,
+  bodyHeaders: OutgoingHttpHeaders
+): void {
+  for (const key of Object.keys(bodyHeaders)) {
+    setHeaderIfMissing(headers, key, bodyHeaders[key] as string | number);
+  }
+}
+
+function applyAuthorization(
+  headers: OutgoingHttpHeaders,
+  authorization?: Authorization
+): void {
+  if (!authorization) {
+    return;
+  }
+
+  if (typeof authorization === 'string') {
+    setHeader(headers, 'Authorization', authorization);
+    return;
+  }
+
+  if (authorization.type !== 'basic') {
+    throw new TypeError(`Unsupported authorization type: ${authorization.type}`);
+  }
+
+  const { username, password } = authorization;
+  const token = Buffer.from(`${username}:${password}`).toString('base64');
+  setHeader(headers, 'Authorization', `Basic ${token}`);
+}
+
+async function applyCookies(
+  headers: OutgoingHttpHeaders,
+  options: RequestOptions,
+  url: URL
+): Promise<void> {
+  if (!options.getCookie) {
+    return;
+  }
+
+  const cookie = await options.getCookie(url);
+  if (cookie) {
+    setHeader(headers, 'Cookie', cookie);
+  }
+}
+
+async function storeCookies(
+  options: RequestOptions,
+  cookies: string | string[] | undefined,
+  url: URL
+): Promise<void> {
+  if (!cookies || !options.setCookie) {
+    return;
+  }
+
+  const values = Array.isArray(cookies) ? cookies : [cookies];
+  for (const cookie of values) {
+    await options.setCookie(cookie, url);
+  }
+}
+
+function serializeBody(body: RequestBody | undefined, json: unknown): SerializedBody {
+  if (body !== undefined && json !== undefined) {
+    throw new TypeError('Use either body or json, not both');
+  }
+
+  if (json !== undefined) {
+    const content = Buffer.from(JSON.stringify(json));
+    return {
+      body: content,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': content.length
+      }
+    };
+  }
+
+  if (body === undefined) {
+    return { headers: {} };
+  }
+
+  if (typeof body === 'string') {
+    return {
+      body,
+      headers: {
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+  }
+
+  if (body instanceof URLSearchParams) {
+    const content = Buffer.from(body.toString());
+    return {
+      body: content,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': content.length
+      }
+    };
+  }
+
+  if (body instanceof MultipartBody) {
+    return {
+      body: body.stream(),
+      headers: body.headers
+    };
+  }
+
+  if (Buffer.isBuffer(body)) {
+    return {
+      body,
+      headers: {
+        'Content-Length': body.length
+      }
+    };
+  }
+
+  if (body instanceof Uint8Array) {
+    const content = Buffer.from(body);
+    return {
+      body: content,
+      headers: {
+        'Content-Length': content.length
+      }
+    };
+  }
+
+  if (isReadable(body)) {
+    return { body, headers: {} };
+  }
+
+  throw new TypeError('Unsupported request body; use json for objects');
+}
+
+function executeStream(
+  options: NodeRequestOptions,
+  body: SerializedRequestBody | undefined,
+  timeout: number
+): Promise<{ message: IncomingMessage }> {
+  const transport = getTransport(options.protocol);
+
   return new Promise((resolve, reject) => {
-    const req = request(options, res => {
-      const chunks: Buffer[] = [];
-
-      res.on('data', chunk => {
-        chunks.push(chunk);
-      });
-
-      res.on('end', () => {
-        resolve([res, Buffer.concat(chunks)]);
-      });
-    });
-
-    req.on('socket', socket => {
-      socket.setTimeout(options.timeout || 30000);
-      socket.on('timeout', function() {
-        req.abort();
-        reject(Error('Timeout'));
-      });
-    });
-
-    req.on('error', error => {
-      if (!req.aborted) {
+    let settled = false;
+    const fail = (error: Error) => {
+      if (!settled) {
+        settled = true;
         reject(error);
       }
+    };
+
+    const req = transport(options, message => {
+      if (!settled) {
+        settled = true;
+        resolve({ message });
+      }
+      message.once('error', fail);
     });
 
-    if (data !== undefined) {
-      if (typeof data.pipe === 'function') {
-        data.pipe(req);
-        return;
-      } else {
-        if (typeof data === 'object' && !(data instanceof Buffer)) {
-          data = JSON.stringify(data);
-        }
-        req.write(data);
-      }
-    }
+    req.once('error', fail);
+    req.setTimeout(timeout, () => {
+      req.destroy(new RequestTimeoutError(timeout));
+    });
 
-    req.end();
+    if (body === undefined) {
+      req.end();
+    } else if (isReadable(body)) {
+      body.once('error', fail);
+      body.pipe(req);
+    } else {
+      req.end(body);
+    }
   });
+}
+
+async function readResponseBody(message: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of message) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function getTransport(protocol: string | null | undefined): typeof httpRequest {
+  if (protocol === 'http:') {
+    return httpRequest;
+  }
+  if (protocol === 'https:') {
+    return httpsRequest;
+  }
+  throw new TypeError(`Unsupported protocol: ${protocol || 'unknown'}`);
+}
+
+function normalizeMethod(options: RequestOptions): string {
+  return (
+    options.method || (options.body !== undefined || options.json !== undefined ? 'POST' : 'GET')
+  ).toUpperCase();
+}
+
+interface NormalizedRetryOptions {
+  retries: number;
+  methods: readonly string[];
+  statusCodes: readonly number[];
+  errorCodes: readonly string[];
+  delay: number | ((context: RetryContext) => number);
+  maxDelay: number;
+  factor: number;
+  jitter: boolean | number;
+  respectRetryAfter: boolean;
+}
+
+const DEFAULT_RETRY_METHODS = ['GET', 'HEAD', 'OPTIONS'] as const;
+const DEFAULT_RETRY_STATUS_CODES = [408, 429, 500, 502, 503, 504] as const;
+const DEFAULT_RETRY_ERROR_CODES = [
+  'EAI_AGAIN',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ESOCKETTIMEDOUT'
+] as const;
+
+function shouldFollowRedirectMessage(
+  message: IncomingMessage,
+  redirect: RedirectMode | undefined
+): boolean {
+  if (redirect !== 'follow') {
+    return false;
+  }
+
+  return (
+    [301, 302, 303, 307, 308].includes(message.statusCode || -1) &&
+    !!message.headers.location
+  );
+}
+
+function shouldSwitchRedirectToGet(statusCode: number, method: string): boolean {
+  return statusCode === 303 || ((statusCode === 301 || statusCode === 302) && method === 'POST');
+}
+
+function normalizeRetry(retry: number | RetryOptions | undefined): NormalizedRetryOptions {
+  const options = typeof retry === 'number' ? { retries: retry } : retry || {};
+  return {
+    retries: Math.max(0, options.retries || 0),
+    methods: (options.methods || DEFAULT_RETRY_METHODS).map(method =>
+      method.toUpperCase()
+    ),
+    statusCodes: options.statusCodes || DEFAULT_RETRY_STATUS_CODES,
+    errorCodes: options.errorCodes || DEFAULT_RETRY_ERROR_CODES,
+    delay: options.delay ?? 100,
+    maxDelay: options.maxDelay ?? 30000,
+    factor: options.factor ?? 2,
+    jitter: options.jitter ?? false,
+    respectRetryAfter: options.respectRetryAfter ?? true
+  };
+}
+
+function retryContextForStatus(
+  retry: NormalizedRetryOptions,
+  attempt: number,
+  method: string,
+  url: string,
+  response: Response | StreamResponse
+): RetryContext | undefined {
+  if (
+    attempt >= retry.retries ||
+    !retry.statusCodes.includes(response.statusCode)
+  ) {
+    return undefined;
+  }
+
+  return {
+    attempt: attempt + 1,
+    retries: retry.retries,
+    method,
+    url,
+    statusCode: response.statusCode
+  };
+}
+
+function retryContextForError(
+  retry: NormalizedRetryOptions,
+  attempt: number,
+  method: string,
+  url: string,
+  error: unknown
+): RetryContext | undefined {
+  if (attempt >= retry.retries || !isRetryableError(retry, error)) {
+    return undefined;
+  }
+
+  return {
+    attempt: attempt + 1,
+    retries: retry.retries,
+    method,
+    url,
+    error: error instanceof Error ? error : undefined
+  };
+}
+
+function canRetryRequest(
+  retry: NormalizedRetryOptions,
+  method: string,
+  body: RequestBody | undefined
+): boolean {
+  return retry.methods.includes(method.toUpperCase()) && canReplayBody(body);
+}
+
+function canReplayBody(body: RequestBody | undefined): boolean {
+  if (body === undefined) {
+    return true;
+  }
+  if (body instanceof MultipartBody) {
+    return body.replayable;
+  }
+  return !isReadable(body);
+}
+
+function discardResponse(response: Response | StreamResponse): void {
+  if (response instanceof StreamResponse) {
+    response.body.resume();
+  }
+}
+
+async function delayForRetry(
+  retry: NormalizedRetryOptions,
+  context: RetryContext,
+  retryAfter?: string
+): Promise<void> {
+  const retryAfterDelay =
+    retry.respectRetryAfter && retryAfter ? parseRetryAfter(retryAfter) : undefined;
+  const computed =
+    retryAfterDelay ??
+    (typeof retry.delay === 'function'
+      ? retry.delay(context)
+      : retry.delay * Math.pow(retry.factor, context.attempt - 1));
+  const capped = Math.min(Math.max(0, computed), retry.maxDelay);
+  const jittered = applyJitter(capped, retry.jitter);
+
+  if (jittered > 0) {
+    await new Promise(resolve => setTimeout(resolve, jittered));
+  }
+}
+
+function parseRetryAfter(value: string): number | undefined {
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1000);
+  }
+
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) {
+    return Math.max(0, date - Date.now());
+  }
+
+  return undefined;
+}
+
+function applyJitter(delay: number, jitter: boolean | number): number {
+  if (!jitter || delay <= 0) {
+    return delay;
+  }
+
+  const ratio = jitter === true ? 0.2 : Math.max(0, jitter);
+  const delta = delay * ratio;
+  return Math.round(delay - delta + Math.random() * delta * 2);
+}
+
+function isRetryableError(
+  retry: NormalizedRetryOptions,
+  error: unknown
+): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && retry.errorCodes.includes(code);
+}
+
+function headerToString(header: string | string[] | undefined): string {
+  return Array.isArray(header) ? header.join(', ') : header || '';
 }

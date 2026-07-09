@@ -1,58 +1,81 @@
-import { Agent, AgentOptions } from 'https';
-import { Url } from 'url';
-import { request } from 'http';
-import { connect, TLSSocket } from 'tls';
+import { request as httpRequest, RequestOptions } from 'http';
+import { Agent, AgentOptions, request as httpsRequest } from 'https';
+import { Duplex } from 'stream';
+import { connect } from 'tls';
+import { RequestTimeoutError } from './errors';
 
 interface HttpsAgentOptions extends AgentOptions {
-  proxy: Url;
+  proxy: URL;
   servername: string;
-  timeout?: number;
+  timeout: number;
 }
 
 export class HttpsAgent extends Agent {
-  options: HttpsAgentOptions;
+  private readonly proxy: URL;
+  private readonly servername: string;
+  private readonly connectTimeout: number;
 
   constructor(options: HttpsAgentOptions) {
-    super(options);
-    this.options = options;
+    const { proxy, servername, timeout, ...agentOptions } = options;
+    super(agentOptions);
+    this.proxy = proxy;
+    this.servername = servername;
+    this.connectTimeout = timeout;
   }
 
-  createConnection(url: Url, next: any) {
+  createConnection(
+    options: RequestOptions,
+    callback?: (err: Error | null, stream: Duplex) => void
+  ): Duplex | null | undefined {
+    const done = callback as
+      | ((err: Error | null, stream?: Duplex) => void)
+      | undefined;
+    let callbackCalled = false;
+    const finish = (error: Error | null, stream?: Duplex) => {
+      if (!callbackCalled) {
+        callbackCalled = true;
+        done?.(error, stream);
+      }
+    };
+    const hostname = String(options.hostname || options.host || '');
+    const port = String(options.port || 443);
+    const connectPath = `${hostname}:${port}`;
+    const request = this.proxy.protocol === 'https:' ? httpsRequest : httpRequest;
     const req = request({
-      host: this.options.proxy.hostname,
-      port: this.options.proxy.port,
+      protocol: this.proxy.protocol,
+      hostname: this.proxy.hostname,
+      port: this.proxy.port || (this.proxy.protocol === 'https:' ? '443' : '80'),
       method: 'CONNECT',
-      path: url.hostname + ':' + url.port,
+      path: connectPath,
       headers: {
-        host: url.hostname
+        Host: connectPath
       }
     });
 
-    let timer: NodeJS.Timeout;
+    req.setTimeout(this.connectTimeout, () => {
+      req.destroy(new RequestTimeoutError(this.connectTimeout));
+    });
 
-    req.on('socket', socket => {
-      timer = setTimeout(() => {
+    req.once('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
         socket.destroy();
-        clearTimeout(timer);
-      }, this.options.timeout || 5000);
-    });
+        finish(
+          new Error(`Proxy CONNECT failed with status ${res.statusCode || -1}`)
+        );
+        return;
+      }
 
-    req.on('connect', (res, socket, head) => {
-      clearTimeout(timer);
-      const stream: TLSSocket = connect(
-        { socket, servername: this.options.servername },
-        () => next(null, stream)
-      );
-      stream.on('error', error => {
-        next(error);
+      const onStreamError = (error: Error) => finish(error, stream);
+      const stream = connect({ socket, servername: this.servername }, () => {
+        stream.removeListener('error', onStreamError);
+        finish(null, stream);
       });
+      stream.once('error', onStreamError);
     });
 
-    req.on('error', err => {
-      clearTimeout(timer);
-      next(err);
-    });
-
+    req.once('error', error => finish(error));
     req.end();
+
+    return undefined;
   }
 }
