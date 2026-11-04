@@ -1,6 +1,6 @@
 {
   "name": "yareq",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "keywords": [
     "request",
     "proxy",
@@ -25,9 +25,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fangwd/yareq.git"
-  },
-  "dependencies": {
-    "socks-wrapper": "^0.4.2"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
@@ -69,5 +66,8 @@
   },
   "bugs": {
     "url": "https://github.com/fangwd/yareq/issues"
+  },
+  "dependencies": {
+    "socks-proxy-agent": "^8.0.5"
   }
 }

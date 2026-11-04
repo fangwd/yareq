@@ -1,5 +1,4 @@
 import {
-  Agent as HttpAgent,
   OutgoingHttpHeaders,
   RequestOptions as NodeRequestOptions
 } from 'http';
@@ -7,11 +6,7 @@ import { PassThrough, Readable, Transform } from 'stream';
 import { promisify } from 'util';
 import * as zlib from 'zlib';
 import { HttpsAgent } from './https-agent';
-
-const socks = require('socks-wrapper') as {
-  HttpAgent: new (port: string | number, host: string) => HttpAgent;
-  HttpsAgent: new (port: string | number, host: string) => HttpAgent;
-};
+import { SocksAgent } from './socks-agent';
 
 const gunzip = promisify(zlib.gunzip);
 const inflate = promisify(zlib.inflate);
@@ -215,9 +210,7 @@ export function applyProxy(
   const proxy = parseUrl(proxyUrl);
 
   if (/^socks/.test(proxy.protocol)) {
-    const Agent =
-      request.protocol === 'http:' ? socks.HttpAgent : socks.HttpsAgent;
-    request.agent = new Agent(proxy.port || defaultPort(proxy), proxy.hostname);
+    request.agent = new SocksAgent(proxy, timeout);
     return;
   }
 

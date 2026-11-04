@@ -4,8 +4,8 @@ Yet another HTTP request library for Node.js.
 
 A thin, promise-based wrapper around Node's built-in `http`/`https` modules with
 first-class support for JSON, multipart forms, streaming, redirects, retries,
-proxies (HTTP/HTTPS CONNECT/SOCKS), basic auth, and cookies — and no runtime
-dependencies beyond an optional SOCKS helper.
+proxies (HTTP/HTTPS CONNECT/SOCKS), basic auth, and cookies — and one runtime
+dependency, `socks-proxy-agent`, for SOCKS.
 
 ## Install
 
@@ -304,8 +304,22 @@ await request('https://example.com', {
 });
 ```
 
-HTTP, HTTPS CONNECT, and SOCKS (`socks://`, `socks5://`) proxy URLs are
-supported. HTTPS targets are tunneled through the proxy with `CONNECT`.
+HTTP, HTTPS CONNECT, and SOCKS proxy URLs are supported. HTTPS targets are
+tunneled through an HTTP proxy with `CONNECT`.
+
+SOCKS URLs name the protocol version and where host names are resolved:
+
+| Scheme | Version | Host names resolved |
+| --- | --- | --- |
+| `socks5h://`, `socks://` | 5 | by the proxy |
+| `socks5://` | 5 | locally |
+| `socks4a://` | 4a | by the proxy |
+| `socks4://` | 4 | locally |
+
+Resolve through the proxy (`socks5h://`) when the proxy decides where requests
+come from, as Tor does: a local lookup leaks the host name and may pick another
+region's servers. Credentials go in the URL:
+`socks5h://user:pass@127.0.0.1:1080`.
 
 ## Timeouts and cancellation
 
@@ -371,7 +385,7 @@ redirects, or invalid arguments.
 | `timeout` | `number` | `30000` | Socket inactivity timeout in ms. |
 | `redirect` | `'manual'` \| `'follow'` | `'manual'` | Whether to follow 3xx redirects. |
 | `maxRedirects` | `number` | `20` | Max redirects to follow before throwing. |
-| `proxy` | `string` \| `URL` | — | Proxy URL (`http:`, `https:`, or `socks:`). |
+| `proxy` | `string` \| `URL` | — | Proxy URL (`http:`, `https:`, or a SOCKS scheme; see [Proxies](#proxies)). |
 | `decompress` | `boolean` | `true` | Decode `gzip`/`deflate`/`br` response bodies. |
 | `responseType` | `'buffer'` \| `'stream'` | `'buffer'` | Buffer the body or return a stream. |
 | `retry` | `number` \| [`RetryOptions`](#retryoptions) | — | Retry policy. A number is shorthand for `{ retries }`. |
