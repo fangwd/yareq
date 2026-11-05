@@ -201,6 +201,15 @@ export function isReadable(value: unknown): value is Readable {
   return value instanceof Readable;
 }
 
+/** The `Proxy-Authorization` value for credentials in a proxy URL; undefined without them. */
+export function proxyAuthorization(proxy: URL): string | undefined {
+  if (!proxy.username && !proxy.password) {
+    return undefined;
+  }
+  const credentials = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+  return `Basic ${Buffer.from(credentials).toString('base64')}`;
+}
+
 export function applyProxy(
   request: NodeRequestOptions,
   proxyUrl: string | URL,
@@ -219,12 +228,17 @@ export function applyProxy(
     request.hostname = proxy.hostname;
     request.port = proxy.port || defaultPort(proxy);
     request.path = targetUrl.href;
+    const authorization = proxyAuthorization(proxy);
+    if (authorization) {
+      request.headers = { ...request.headers, 'Proxy-Authorization': authorization };
+    }
     return;
   }
 
   request.port = request.port || defaultPort(targetUrl);
   request.agent = new HttpsAgent({
     proxy,
+    authorization: proxyAuthorization(proxy),
     servername: targetUrl.hostname,
     timeout
   });

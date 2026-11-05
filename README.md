@@ -305,7 +305,9 @@ await request('https://example.com', {
 ```
 
 HTTP, HTTPS CONNECT, and SOCKS proxy URLs are supported. HTTPS targets are
-tunneled through an HTTP proxy with `CONNECT`.
+tunneled through an HTTP proxy with `CONNECT`. Credentials in an HTTP proxy URL
+(`http://user:pass@127.0.0.1:8080`) are sent as `Proxy-Authorization: Basic`,
+with forwarded requests and with `CONNECT`.
 
 SOCKS URLs name the protocol version and where host names are resolved:
 

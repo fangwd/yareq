@@ -1,5 +1,6 @@
 import { AddressInfo, connect, createServer, Server, Socket } from 'net';
 import { readFileSync } from 'fs';
+import { createServer as createHttpServer, request as httpRequest } from 'http';
 import { createServer as createHttpsServer, request as httpsRequest } from 'https';
 import { join } from 'path';
 import { request, RequestTimeoutError } from '../src';
@@ -342,5 +343,83 @@ test.each(['http', 'https'])('%s SOCKS negotiation honors the request timeout', 
     clearTimeout(watchdog);
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => silentProxy.close(() => resolve()));
+  }
+});
+
+/** A minimal HTTP proxy (forwarding and CONNECT) that requires `crawler:s3cret`; every destination is 127.0.0.1. */
+async function startHttpProxy() {
+  const expected = `Basic ${Buffer.from('crawler:s3cret').toString('base64')}`;
+  const sockets = new Set<Socket>();
+  const seen: string[] = [];
+  const server = createHttpServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    if (req.headers['proxy-authorization'] !== expected) {
+      res.writeHead(407).end();
+      return;
+    }
+    const target = new URL(req.url!);
+    const upstream = httpRequest({ hostname: '127.0.0.1', port: target.port, path: target.pathname, method: req.method }, response => {
+      res.writeHead(response.statusCode!, response.headers);
+      response.pipe(res);
+    });
+    upstream.once('error', () => res.writeHead(502).end());
+    req.pipe(upstream);
+  });
+  server.on('connect', (req, socket: Socket) => {
+    seen.push(`CONNECT ${req.url}`);
+    if (req.headers['proxy-authorization'] !== expected) {
+      socket.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\n');
+      return;
+    }
+    const port = Number(req.url!.split(':').pop());
+    const upstream = connect(port, '127.0.0.1', () => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      upstream.pipe(socket);
+      socket.pipe(upstream);
+    });
+    upstream.once('error', () => socket.destroy());
+    sockets.add(upstream);
+  });
+  server.on('connection', socket => sockets.add(socket));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: (credentials?: string) => `http://${credentials ? `${credentials}@` : ''}127.0.0.1:${port}`,
+    seen,
+    close: () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  };
+}
+
+test('credentials in an HTTP proxy url authenticate forwarded requests', async () => {
+  const proxy = await startHttpProxy();
+  try {
+    const res = await request(`http://${REMOTE_ONLY}:${targetPort}/`, { proxy: proxy.url('crawler:s3cret') });
+    expect(res.statusCode).toBe(200);
+    expect(proxy.seen).toEqual([`GET http://${REMOTE_ONLY}:${targetPort}/`]);
+
+    expect((await request(`http://${REMOTE_ONLY}:${targetPort}/`, { proxy: proxy.url('crawler:wrong') })).statusCode).toBe(407);
+    expect((await request(`http://${REMOTE_ONLY}:${targetPort}/`, { proxy: proxy.url() })).statusCode).toBe(407);
+  } finally {
+    await proxy.close();
+  }
+});
+
+test('credentials in an HTTP proxy url authenticate CONNECT for HTTPS', async () => {
+  const proxy = await startHttpProxy();
+  const secureTarget = createHttpsServer({ key: tlsKey, cert: tlsCertificate }, (_req, res) => res.end('secure'));
+  await new Promise<void>(resolve => secureTarget.listen(0, '127.0.0.1', resolve));
+  const { port } = secureTarget.address() as AddressInfo;
+  try {
+    const url = new URL(`https://${REMOTE_ONLY}:${port}/`);
+    await expect(httpsThroughSocks(url, proxy.url('crawler:s3cret'), 1000)).resolves.toBe('secure');
+    expect(proxy.seen).toEqual([`CONNECT ${REMOTE_ONLY}:${port}`]);
+
+    await expect(httpsThroughSocks(url, proxy.url('crawler:wrong'), 1000)).rejects.toThrow(/status 407/);
+  } finally {
+    await proxy.close();
+    await new Promise<void>(resolve => secureTarget.close(() => resolve()));
   }
 });

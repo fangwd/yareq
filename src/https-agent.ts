@@ -6,19 +6,23 @@ import { RequestTimeoutError } from './errors';
 
 interface HttpsAgentOptions extends AgentOptions {
   proxy: URL;
+  /** The `Proxy-Authorization` sent with CONNECT, if any. */
+  authorization?: string;
   servername: string;
   timeout: number;
 }
 
 export class HttpsAgent extends Agent {
   private readonly proxy: URL;
+  private readonly authorization?: string;
   private readonly servername: string;
   private readonly connectTimeout: number;
 
   constructor(options: HttpsAgentOptions) {
-    const { proxy, servername, timeout, ...agentOptions } = options;
+    const { proxy, authorization, servername, timeout, ...agentOptions } = options;
     super(agentOptions);
     this.proxy = proxy;
+    this.authorization = authorization;
     this.servername = servername;
     this.connectTimeout = timeout;
   }
@@ -48,7 +52,8 @@ export class HttpsAgent extends Agent {
       method: 'CONNECT',
       path: connectPath,
       headers: {
-        Host: connectPath
+        Host: connectPath,
+        ...(this.authorization ? { 'Proxy-Authorization': this.authorization } : {})
       }
     });
 
@@ -66,7 +71,9 @@ export class HttpsAgent extends Agent {
       }
 
       const onStreamError = (error: Error) => finish(error, stream);
-      const stream = connect({ socket, servername: this.servername }, () => {
+      // The request's TLS options (ca, rejectUnauthorized, ...) apply to the tunnelled connection.
+      const { path: _path, port: _port, ...tlsOptions } = options;
+      const stream = connect({ ...(tlsOptions as object), socket, servername: this.servername }, () => {
         stream.removeListener('error', onStreamError);
         finish(null, stream);
       });
